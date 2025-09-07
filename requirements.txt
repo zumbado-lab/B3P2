@@ -1,0 +1,12 @@
+numpy
+pandas
+scikit-learn
+xgboost
+mordredcommunity
+shap
+joblib
+pyyaml
+tqdm
+umap-learn
+matplotlib
+plotly

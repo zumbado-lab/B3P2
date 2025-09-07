@@ -1,0 +1,27 @@
+project_name: B3P2
+random_seed: 42
+tau: 0.40
+
+paths:
+  raw_data: data/raw/bbb_in_vivo.csv
+  external_data: data/raw/bbb_external.csv
+  processed_data: data/processed/
+  models_dir: models
+  reports_dir: reports
+
+modeling:
+  target_column: class   # cambia a bbb_class si así se llama en tu CSV
+  cv_folds: 5
+  models:
+    - RL
+    - RF
+    - SVM
+    - XGB
+
+validation:
+  n_bootstrap: 200
+  y_randomization: 50
+
+applicability_domain:
+  k: 5
+  p: 0.95

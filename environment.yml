@@ -1,0 +1,20 @@
+name: b3p2
+channels:
+  - conda-forge
+dependencias:
+  - python=3.10
+  - pip
+  - numpy
+  - pandas
+  - scikit-learn
+  - xgboost
+  - rdkit
+  - matplotlib
+  - plotly
+  - pip:
+      - mordredcommunity
+      - shap
+      - joblib
+      - pyyaml
+      - tqdm
+      - umap-learn

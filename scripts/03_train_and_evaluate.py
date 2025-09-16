@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 B3P2 — Train & Evaluate (RL, SVM-RBF, RF, XGBoost)
-- Loads fixed splits (train80/test20) and optional external set.
+- Loads fixed splits (train80/test20) and optionally an external set.
 - Trains the 4 models with seed=42.
 - Applies deployment threshold tau (default 0.40) to probabilities.
 - Prints a comparative table and writes plots + artifacts.
@@ -14,8 +14,10 @@ Inputs (defaults):
 Outputs:
   models/{rl,svm_rbf,rf,xgb}.joblib
   reports/tables/model_comparison.csv
+  reports/tables/model_comparison_external.csv  (if external exists)
   reports/figures/roc_all.png
   reports/figures/calibration_all.png
+  reports/logs/train_manifest.json
 """
 
 from __future__ import annotations
@@ -93,7 +95,7 @@ def main():
 
     train_path = Path(args.train)
     test_path = Path(args.test)
-    ext_path = Path(args.external)
+    ext_path = Path(args.external) if args.external else None
 
     models_dir = Path(args.models_dir)
     figures_dir = Path(args.reports_dir) / "figures"
@@ -109,14 +111,41 @@ def main():
     X_train, y_train = train[X_cols].to_numpy(), train[TARGET].astype(int).to_numpy()
     X_test,  y_test  = test[X_cols].to_numpy(),  test[TARGET].astype(int).to_numpy()
 
-    # External (optional)
-    has_external = ext_path.exists()
+    # External (robust detection with fallbacks)
+    has_external = False
+    ext = None
+    external_candidates = []
+    if ext_path is not None:
+        external_candidates.append(ext_path)
+    external_candidates += [
+        Path("data/processed/external_aligned.csv"),
+        Path("data/processed/external.csv"),
+        Path("data/processed/splits/external.csv"),
+    ]
+    for cand in external_candidates:
+        if cand and Path(cand).exists():
+            ext_path = Path(cand)
+            has_external = True
+            break
+
     if has_external:
         ext = load_csv(ext_path)
-        # align columns if user committed external with metadata first
-        ext = ext[[c for c in train.columns if c in ext.columns] + [c for c in train.columns if c not in ext.columns]]
+        # Align columns to train features; fill missing with NaN
+        missing = [c for c in X_cols if c not in ext.columns]
+        for c in missing:
+            ext[c] = np.nan
+        # Preserve order; if TARGET absent, skip external metrics later
+        cols_for_ext = X_cols + ([TARGET] if TARGET in ext.columns else [])
+        ext = ext[cols_for_ext]
         X_ext = ext[X_cols].to_numpy()
-        y_ext = ext[TARGET].astype(int).to_numpy()
+        y_ext = ext[TARGET].astype(int).to_numpy() if TARGET in ext.columns else None
+
+    print(f"[INFO] Train file: {train_path}")
+    print(f"[INFO] Test  file: {test_path}")
+    if has_external:
+        print(f"[INFO] External file: {ext_path}")
+    else:
+        print("[INFO] External file: not found (skipping External rows)")
 
     # Models
     models = {
@@ -142,47 +171,57 @@ def main():
         ),
     }
 
-    # Train
+    # Train and persist
     for name, mdl in models.items():
         mdl.fit(X_train, y_train)
         joblib.dump(mdl, models_dir / f"{name}.joblib")
 
-    # Evaluate (test and external) with fixed tau
+    # Evaluate with fixed tau
+    tau = args.tau
     records = []
     roc_curves = {}
     calib_points = {}
 
     for name, mdl in models.items():
-        # probas
+        # Test
         yprob_test = mdl.predict_proba(X_test)[:, 1]
-        mb_test = metrics_block(y_test, yprob_test, tau=args.tau)
+        mb_test = metrics_block(y_test, yprob_test, tau=tau)
         mb_test.update({"Model": name, "Split": "Test20"})
         records.append(mb_test)
 
-        # curves
         fpr, tpr, _ = roc_curve(y_test, yprob_test)
         roc_curves[name] = (fpr, tpr)
         frac_pos, mean_pred = calibration_curve(y_test, yprob_test, n_bins=10, strategy="uniform")
         calib_points[name] = (mean_pred, frac_pos)
 
-        if has_external:
+        # External
+        if has_external and (ext is not None) and (TARGET in ext.columns):
             yprob_ext = mdl.predict_proba(X_ext)[:, 1]
-            mb_ext = metrics_block(y_ext, yprob_ext, tau=args.tau)
+            mb_ext = metrics_block(y_ext, yprob_ext, tau=tau)
             mb_ext.update({"Model": name, "Split": "External"})
             records.append(mb_ext)
 
-    # Table
+    # Table (all rows)
     df = pd.DataFrame.from_records(records)
-    # Order columns
     cols = ["Model","Split","Accuracy","Precision","Recall","F1","BalancedAcc",
             "MCC","AUROC","AUPRC","Brier","TP","FP","FN","TN"]
     df = df[cols]
     df.sort_values(by=["Split","AUROC"], ascending=[True, False], inplace=True)
     df.to_csv(tables_dir / "model_comparison.csv", index=False)
 
-    # Print concise table
-    print("\n=== Model comparison (tau = {:.2f}) ===".format(args.tau))
+    print("\n=== Model comparison (tau = {:.2f}) ===".format(tau))
     print(df.to_string(index=False))
+
+    # External-only table
+    if has_external:
+        df_ext = df[df["Split"] == "External"].copy()
+        if not df_ext.empty:
+            df_ext.sort_values(by=["AUROC"], ascending=False, inplace=True)
+            df_ext.to_csv(tables_dir / "model_comparison_external.csv", index=False)
+            print("\n=== Model comparison — External (tau = {:.2f}) ===".format(tau))
+            print(df_ext.to_string(index=False))
+        else:
+            print("\n[INFO] External split detected, but no rows were produced. Check TARGET column in external.")
 
     # ROC combined (Test20)
     plt.figure(figsize=(5.2,4.2))
@@ -212,12 +251,13 @@ def main():
     # Manifest
     manifest = {
         "seed": args.seed,
-        "tau": args.tau,
+        "tau": tau,
         "train": str(train_path),
         "test": str(test_path),
         "external": str(ext_path) if has_external else None,
         "models": [str(models_dir / f"{k}.joblib") for k in models.keys()],
-        "table": str(tables_dir / "model_comparison.csv"),
+        "table_all": str(tables_dir / "model_comparison.csv"),
+        "table_external": str(tables_dir / "model_comparison_external.csv") if has_external else None,
         "figures": [str(figures_dir / "roc_all.png"), str(figures_dir / "calibration_all.png")],
     }
     (logs_dir / "train_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")

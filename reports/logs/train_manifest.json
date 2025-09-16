@@ -1,0 +1,19 @@
+{
+  "seed": 42,
+  "tau": 0.4,
+  "train": "data/processed/splits/train80.csv",
+  "test": "data/processed/splits/test20.csv",
+  "external": null,
+  "models": [
+    "models/rl.joblib",
+    "models/svm_rbf.joblib",
+    "models/rf.joblib",
+    "models/xgb.joblib"
+  ],
+  "table_all": "reports/tables/model_comparison.csv",
+  "table_external": null,
+  "figures": [
+    "reports/figures/roc_all.png",
+    "reports/figures/calibration_all.png"
+  ]
+}

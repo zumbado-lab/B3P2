@@ -51,7 +51,7 @@ scripts/         # Python scripts (00–05 pipeline)
 
 ---
 
-#Usage
+##Usage
 
 Run the full pipeline with:
 python scripts/03_train_and_evaluate.py --config configs/default.yaml
